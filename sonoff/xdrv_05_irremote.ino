@@ -519,33 +519,77 @@ bool IrSendCommand(void)
       snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, D_JSON_DONE);
 
       if (!strstr(XdrvMailbox.data, "{")) {  // If no JSON it must be rawdata
-        // IRSend frequency, rawdata, rawdata ...
+	// IRSend frequency, rawdata, rawdata ...
+	// or IRSend raw,<freq>,<header mark>,<header space>,<bit mark>,<zero space>,<one space>,1010101....
         char *p;
         char *str = strtok_r(XdrvMailbox.data, ", ", &p);
-        uint16_t freq = atoi(str);
-        if (!freq) { freq = 38000; }  // Default to 38kHz
-        uint16_t count = 0;
-        char *q = p;
-        for (; *q; count += (*q++ == ','));
-        if (count) {  // At least two raw data values
-          count++;
-          uint16_t raw_array[count];  // It's safe to use stack for up to 240 packets (limited by mqtt_data length)
-          uint8_t i = 0;
-          for (str = strtok_r(NULL, ", ", &p); str && i < count; str = strtok_r(NULL, ", ", &p)) {
-            raw_array[i++] = strtoul(str, NULL, 0);  // Allow decimal (5246996) and hexadecimal (0x501014) input
-          }
+	uint16_t freq = atoi(str);
+	if (!freq && (*str != '0')) {	// first parameter is a string
+	  uint16_t count = 0;
+          char *q = p;
+          for (; *q; count += (*q++ == ','));
+	  if (count == 6) {
+	    str = strtok_r(NULL, ", ", &p);
+	    freq = atoi(str);
+            if (!freq) { freq = 38000; }  // Default to 38kHz
+	    str = strtok_r(NULL, ", ", &p);
+            uint16_t hdr_mrk = atoi(str);	// header mark
+	    str = strtok_r(NULL, ", ", &p);
+            uint16_t hdr_spc = atoi(str);	// header space
+	    str = strtok_r(NULL, ", ", &p);
+            uint16_t bit_mrk = atoi(str);	// bit mark
+	    str = strtok_r(NULL, ", ", &p);
+            uint16_t zer_spc = atoi(str);	// zero space
+	    str = strtok_r(NULL, ", ", &p);
+            uint16_t one_spc = atoi(str);	// one space
+
+	    uint16_t raw_array[strlen(p)*2+3];	// header + bits + end
+	    uint16_t i = 0;
+	    raw_array[i++] = hdr_mrk;
+	    raw_array[i++] = hdr_spc;
+
+	    for (; *p; *p++) {
+	       if (*p == '0') {
+	          raw_array[i++] = bit_mrk; 
+                  raw_array[i++] = zer_spc;
+	       } else {
+	          raw_array[i++] = bit_mrk; 
+                  raw_array[i++] = one_spc;
+	       }
+	    }
+	    raw_array[i++] = bit_mrk;
+
+	    irsend_active = true;
+	    irsend->sendRaw(raw_array, i, freq);
+
+	  } else {
+	    snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, D_JSON_INVALID_RAWDATA);
+	  }
+	} else {
+          if (!freq) { freq = 38000; }  // Default to 38kHz
+          uint16_t count = 0;
+          char *q = p;
+          for (; *q; count += (*q++ == ','));
+          if (count) {  // At least two raw data values
+            count++;
+            uint16_t raw_array[count];  // It's safe to use stack for up to 240 packets (limited by mqtt_data length)
+            uint8_t i = 0;
+            for (str = strtok_r(NULL, ", ", &p); str && i < count; str = strtok_r(NULL, ", ", &p)) {
+              raw_array[i++] = strtoul(str, NULL, 0);  // Allow decimal (5246996) and hexadecimal (0x501014) input
+            }
 
 //          AddLog_P2(LOG_LEVEL_DEBUG, PSTR("IRS: Count %d, Freq %d, Arr[0] %d, Arr[count -1] %d"), count, freq, raw_array[0], raw_array[count -1]);
 
-          irsend_active = true;
-          irsend->sendRaw(raw_array, count, freq);
-          if (!count) {
-            snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, D_JSON_FAILED);
+            irsend_active = true;
+            irsend->sendRaw(raw_array, count, freq);
+            if (!count) {
+              snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, D_JSON_FAILED);
+            }
           }
-        }
-        else {
-          snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, D_JSON_INVALID_RAWDATA);
-        }
+          else {
+            snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, D_JSON_INVALID_RAWDATA);
+          }
+	}
       }
       else {
         char dataBufUc[XdrvMailbox.data_len];
